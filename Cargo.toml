@@ -17,6 +17,7 @@ keywords = [
 ]
 exclude = [
     ".vscode",
+    ".github",
 ]
 
 [dependencies]
