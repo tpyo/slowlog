@@ -1,0 +1,31 @@
+[package]
+name = "slowlog"
+version = "0.1.0"
+edition = "2021"
+description = "A parser for MySQL slow query logs that anonymises queries by replacing literals with placeholders."
+authors = ["Don Schonknecht <don@tpyo.net>"]
+repository = "https://github.com/tpyo/slowlog"
+readme = "README.md"
+license = "MIT"
+categories = ["parser-implementations", "database"]
+keywords = [
+    "mysql",
+    "slowlog",
+    "parser",
+    "anonymise",
+    "query",
+]
+
+[dependencies]
+chrono = "0.4.42"
+regex = "1.12.2"
+sha1 = "0.10.6"
+sqlparser = "0.60.0"
+
+[[example]]
+name = "reader"
+path = "examples/reader.rs"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
