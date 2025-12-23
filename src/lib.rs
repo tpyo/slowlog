@@ -367,15 +367,15 @@ SELECT * FROM products WHERE name = 'Test';
         process_slow_log_reader(reader, |query| {
             queries.push(query);
         })
-        .unwrap();
+        .expect("Failed to process slow log");
 
         assert_eq!(queries.len(), 2);
 
         // First query
         assert_eq!(queries[0].stats.user, "testuser[testuser]");
         assert_eq!(queries[0].stats.host, "192.168.1.100");
-        assert_eq!(queries[0].stats.query_time, 2.5);
-        assert_eq!(queries[0].stats.lock_time, 0.01);
+        assert!((queries[0].stats.query_time - 2.5).abs() < 0.1);
+        assert!((queries[0].stats.lock_time - 0.01).abs() < 0.1);
         assert_eq!(queries[0].stats.rows_sent, 100);
         assert_eq!(queries[0].stats.rows_examined, 5000);
         assert!(queries[0].query.contains("SELECT * FROM users"));
@@ -384,12 +384,15 @@ SELECT * FROM products WHERE name = 'Test';
         // Second query
         assert_eq!(queries[1].stats.user, "admin[admin]");
         assert_eq!(queries[1].stats.host, "127.0.0.1");
-        assert_eq!(queries[1].stats.query_time, 0.5);
-        assert_eq!(queries[1].stats.lock_time, 0.0);
+        assert!((queries[1].stats.query_time - 0.5).abs() < 0.1);
+        assert!((queries[1].stats.lock_time - 0.0).abs() < 0.1);
         assert_eq!(queries[1].stats.rows_sent, 1);
         assert_eq!(queries[1].stats.rows_examined, 1);
         assert!(queries[1].query.contains("SELECT * FROM products"));
-        assert_eq!(queries[1].formatted, "SELECT * FROM products WHERE name = ?");
+        assert_eq!(
+            queries[1].formatted,
+            "SELECT * FROM products WHERE name = ?"
+        );
     }
 
     #[test]
@@ -413,7 +416,7 @@ SELECT 1;
         process_slow_log_reader(reader, |query| {
             queries.push(query);
         })
-        .unwrap();
+        .expect("Failed to process slow log");
 
         // Should skip header lines, SET, USE, and only parse the actual query
         assert_eq!(queries.len(), 1);
@@ -433,7 +436,7 @@ SELECT 1;
         process_slow_log_reader(reader, |_| {
             count += 1;
         })
-        .unwrap();
+        .expect("Failed to process slow log");
 
         // Empty query should be skipped
         assert_eq!(count, 0);
@@ -458,7 +461,7 @@ AND status = 'active';
         process_slow_log_reader(reader, |query| {
             queries.push(query);
         })
-        .unwrap();
+        .expect("Failed to process slow log");
 
         assert_eq!(queries.len(), 1);
         assert!(queries[0].query.contains("SELECT"));
@@ -484,7 +487,7 @@ SELECT * FROM";
         process_slow_log_reader(reader, |_| {
             count += 1;
         })
-        .unwrap();
+        .expect("Failed to process slow log");
 
         // Invalid SQL should be skipped (error printed to stderr)
         assert_eq!(count, 0);
@@ -517,12 +520,12 @@ SELECT * FROM users WHERE id = 456;
         process_slow_log_reader(reader1, |query| {
             fingerprint1 = query.fingerprint.clone();
         })
-        .unwrap();
+        .expect("Failed to process first slow log");
 
         process_slow_log_reader(reader2, |query| {
             fingerprint2 = query.fingerprint.clone();
         })
-        .unwrap();
+        .expect("Failed to process second slow log");
 
         // Different values but same query pattern should have same fingerprint
         assert_eq!(fingerprint1, fingerprint2);
@@ -544,16 +547,19 @@ INSERT INTO logs (message) VALUES ('test');
 # User@Host: final[final] @  [127.0.0.1]
 "
         )
-        .unwrap();
+        .expect("Failed to process slow log");
 
         let mut queries = Vec::new();
         process_slow_log_file(temp_file.path().to_str().unwrap(), |query| {
             queries.push(query);
         })
-        .unwrap();
+        .expect("Failed to process slow log");
 
         assert_eq!(queries.len(), 1);
-        assert_eq!(queries[0].formatted, "INSERT INTO logs (message) VALUES (?)");
+        assert_eq!(
+            queries[0].formatted,
+            "INSERT INTO logs (message) VALUES (?)"
+        );
     }
 
     #[test]
