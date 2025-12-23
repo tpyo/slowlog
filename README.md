@@ -2,6 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/slowlog.svg)](https://crates.io/crates/slowlog)
 [![docs.rs](https://img.shields.io/docsrs/slowlog)](https://docs.rs/slowlog/latest/slowlog/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![codecov](https://codecov.io/github/tpyo/slowlog/graph/badge.svg?token=4KF885JGU8)](https://codecov.io/github/tpyo/slowlog)
 
 A Rust library for parsing and analysing MySQL slow query logs. This library anonymises SQL queries by replacing literal values with placeholders, making it easy to identify and group similar queries for performance analysis.
@@ -165,15 +166,3 @@ pub enum QueryError {
 - SQL functions (MAX, MIN, CEIL, FLOOR, etc.)
 - GROUPING operations
 - Binary and unary operations
-
-## License
-
-MIT
-
-## Repository
-
-https://github.com/tpyo/slowlog
-
-## Author
-
-Don Schonknecht <don@tpyo.net>
