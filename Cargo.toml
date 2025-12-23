@@ -15,6 +15,9 @@ keywords = [
     "anonymise",
     "query",
 ]
+exclude = [
+    ".vscode",
+]
 
 [dependencies]
 chrono = "0.4.42"
@@ -22,9 +25,16 @@ regex = "1.12.2"
 sha1 = "0.10.6"
 sqlparser = "0.60.0"
 
+[dev-dependencies]
+tempfile = "3"
+
 [[example]]
 name = "reader"
 path = "examples/reader.rs"
+
+[[example]]
+name = "aggregate"
+path = "examples/aggregate.rs"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
