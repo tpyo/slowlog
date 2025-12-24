@@ -12,6 +12,7 @@ struct QueryAggregates {
     max_query_time: f64,
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn main() {
     let mut queries: HashMap<String, QueryAggregates> = HashMap::new();
 
