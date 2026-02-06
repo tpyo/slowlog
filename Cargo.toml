@@ -22,7 +22,7 @@ exclude = [
 
 [dependencies]
 chrono = "0.4.43"
-regex = "1.12.2"
+regex = "1.12.3"
 sha1 = "0.10.6"
 sqlparser = "0.60.0"
 
