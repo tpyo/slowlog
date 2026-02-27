@@ -27,7 +27,7 @@ sha1 = "0.10.6"
 sqlparser = "0.61.0"
 
 [dev-dependencies]
-tempfile = "3.25.0"
+tempfile = "3.26.0"
 
 [[example]]
 name = "reader"
