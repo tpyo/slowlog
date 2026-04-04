@@ -99,7 +99,7 @@ pub struct QueryStats {
 /// ```
 /// use slowlog::process_slow_log_str;
 ///
-/// process_slow_log_str("", |query| {
+/// process_slow_log_str("SELECT * FROM users", |query| {
 ///     // Group queries by fingerprint
 ///     println!("Fingerprint: {}", query.fingerprint);
 ///     println!("Template: {}", query.formatted);
