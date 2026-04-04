@@ -393,4 +393,61 @@ mod tests {
         let fingerprint = fingerprint_query(query);
         assert_eq!(fingerprint, "a0b2ab83e88b7d55eec3d242dd27ff2bbb0e06cf");
     }
+
+    #[test]
+    fn test_select_with_limit_comma_offset() {
+        // MySQL-style LIMIT offset, count syntax
+        let input = "SELECT * FROM tablename WHERE id = 1 LIMIT 20, 10";
+        let expected = "SELECT * FROM tablename WHERE id = ? LIMIT ?, ?";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_is_null() {
+        let input = "SELECT * FROM tablename WHERE col IS NULL";
+        let expected = "SELECT * FROM tablename WHERE col IS NULL";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_is_not_null() {
+        let input = "SELECT * FROM tablename WHERE col IS NOT NULL";
+        let expected = "SELECT * FROM tablename WHERE col IS NOT NULL";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_unary_op() {
+        let input = "SELECT * FROM tablename WHERE NOT (age > 18)";
+        let expected = "SELECT * FROM tablename WHERE NOT (age > ?)";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_cast() {
+        let input = "SELECT CAST(id AS CHAR) FROM tablename WHERE id = 1";
+        let expected = "SELECT CAST(id AS CHAR) FROM tablename WHERE id = ?";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_case_operand() {
+        let input = "SELECT CASE status WHEN 1 THEN 'active' WHEN 2 THEN 'inactive' ELSE 'unknown' END FROM tablename";
+        let expected = "SELECT CASE status WHEN ? THEN ? WHEN ? THEN ? ELSE ? END FROM tablename";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_in_subquery() {
+        let input = "SELECT * FROM tablename WHERE id IN (SELECT id FROM other WHERE status = 1)";
+        let expected = "SELECT * FROM tablename WHERE id IN (SELECT id FROM other WHERE status = ?)";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_subquery_no_where() {
+        let input = "SELECT (SELECT COUNT(*) FROM other), name FROM tablename WHERE id = 1";
+        let expected = "SELECT (SELECT COUNT(*) FROM other), name FROM tablename WHERE id = ?";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
 }

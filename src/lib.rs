@@ -583,4 +583,102 @@ INSERT INTO logs (message) VALUES ('test');
         let result = process_slow_log_file("/nonexistent/path/to/file.log", |_| {});
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_query_error_display_parse_error() {
+        let err = QueryError::ParseError("unexpected token".to_string());
+        assert_eq!(format!("{err}"), "Failed to parse query: unexpected token");
+    }
+
+    #[test]
+    fn test_query_error_display_invalid_query() {
+        let err = QueryError::InvalidQuery;
+        assert_eq!(format!("{err}"), "No valid SQL statement found");
+    }
+
+    #[test]
+    fn test_process_slow_log_str_basic() {
+        let data = "# Time: 2024-01-01T12:00:00.000000Z
+# User@Host: testuser[testuser] @  [192.168.1.100]
+# Query_time: 2.5  Lock_time: 0.01 Rows_sent: 100  Rows_examined: 5000
+SELECT * FROM users WHERE id = 123;
+# Time: 2024-01-01T12:01:00.000000Z
+# User@Host: final[final] @  [127.0.0.1]
+";
+        let mut queries = Vec::new();
+        process_slow_log_str(data, |query| {
+            queries.push(query);
+        });
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].stats.user, "testuser[testuser]");
+        assert_eq!(queries[0].stats.host, "192.168.1.100");
+        assert!((queries[0].stats.query_time - 2.5).abs() < 0.1);
+        assert_eq!(queries[0].formatted, "SELECT * FROM users WHERE id = ?");
+    }
+
+    #[test]
+    fn test_process_slow_log_str_skip_lines() {
+        let data = "/usr/sbin/mysqld, Version: 8.0.0
+SET timestamp=1625097600;
+USE testdb;
+# Time: 2024-01-01T12:00:00.000000Z
+# User@Host: user[user] @  [10.0.0.1]
+# Query_time: 1.0  Lock_time: 0.0 Rows_sent: 1  Rows_examined: 1
+SELECT 1;
+# Time: 2024-01-01T12:01:00.000000Z
+# User@Host: final[final] @  [127.0.0.1]
+";
+        let mut queries = Vec::new();
+        process_slow_log_str(data, |query| {
+            queries.push(query);
+        });
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].formatted, "SELECT ?");
+    }
+
+    #[test]
+    fn test_process_slow_log_str_invalid_sql() {
+        // Invalid SQL followed by a new user entry triggers the error branch
+        let data = "# Time: 2024-01-01T12:00:00.000000Z
+# User@Host: user[user] @  [127.0.0.1]
+# Query_time: 0.5  Lock_time: 0.0 Rows_sent: 0  Rows_examined: 0
+SELECT * FROM
+# Time: 2024-01-01T12:01:00.000000Z
+# User@Host: user2[user2] @  [127.0.0.1]
+# Query_time: 1.0  Lock_time: 0.0 Rows_sent: 1  Rows_examined: 1
+SELECT 1;
+# Time: 2024-01-01T12:02:00.000000Z
+# User@Host: final[final] @  [127.0.0.1]
+";
+        let mut count = 0;
+        process_slow_log_str(data, |_| {
+            count += 1;
+        });
+        // First query (invalid SQL) is skipped, second succeeds
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_process_slow_log_reader_error_branch() {
+        // Invalid SQL followed by a new user entry triggers the error branch
+        let data = b"# Time: 2024-01-01T12:00:00.000000Z
+# User@Host: user[user] @  [127.0.0.1]
+# Query_time: 0.5  Lock_time: 0.0 Rows_sent: 0  Rows_examined: 0
+SELECT * FROM
+# Time: 2024-01-01T12:01:00.000000Z
+# User@Host: user2[user2] @  [127.0.0.1]
+# Query_time: 1.0  Lock_time: 0.0 Rows_sent: 1  Rows_examined: 1
+SELECT 1;
+# Time: 2024-01-01T12:02:00.000000Z
+# User@Host: final[final] @  [127.0.0.1]
+";
+        let reader = BufReader::new(&data[..]);
+        let mut count = 0;
+        process_slow_log_reader(reader, |_| {
+            count += 1;
+        })
+        .expect("Failed to process slow log");
+        // First query (invalid SQL) is skipped, second succeeds
+        assert_eq!(count, 1);
+    }
 }
