@@ -117,6 +117,7 @@ fn replace_values_in_function(func: &mut Function) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn replace_values_in_expr(expr: &mut Expr) {
     match expr {
         Expr::Value(_) => {
