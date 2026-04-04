@@ -20,11 +20,15 @@ exclude = [
     ".github",
 ]
 
+[features]
+default = ["readers"]
+readers = []
+
 [dependencies]
-chrono = "0.4.44"
-regex = "1.12.3"
-sha1 = "0.10.6"
-sqlparser = "0.61.0"
+chrono = { version = "0.4.44", default-features = false, features = ["alloc"] }
+hex-literal = "1.1.0"
+sha1 = { version = "0.11.0", default-features = false }
+sqlparser = { version = "0.61.0", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -32,10 +36,12 @@ tempfile = "3.27.0"
 [[example]]
 name = "reader"
 path = "examples/reader.rs"
+required-features = ["readers"]
 
 [[example]]
 name = "aggregate"
 path = "examples/aggregate.rs"
+required-features = ["readers"]
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

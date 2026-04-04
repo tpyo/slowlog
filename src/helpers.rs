@@ -1,62 +1,80 @@
 use chrono::{DateTime, TimeZone, Utc};
-use regex::Regex;
 
-/// Helper function to parse timestamps from log entries
+/// Parses timestamps from log entries.
+/// Format: "# Time: 2024-01-01T12:00:00.000000Z"
 pub(crate) fn parse_timestamp(line: &str) -> Option<DateTime<Utc>> {
-    let re =
-        Regex::new(r"#\sTime: (\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}).(\d+)Z").unwrap();
-    re.captures(line).and_then(|caps| {
-        let year = caps[1].parse::<i32>().ok()?;
-        let month = caps[2].parse::<u32>().ok()?;
-        let day = caps[3].parse::<u32>().ok()?;
-        let hour = caps[4].parse::<u32>().ok()?;
-        let minute = caps[5].parse::<u32>().ok()?;
-        let second = caps[6].parse::<u32>().ok()?;
-        Some(
-            Utc.with_ymd_and_hms(year, month, day, hour, minute, second)
-                .unwrap(),
-        )
-    })
+    let line = line.strip_prefix("# Time: ")?;
+    let mut parts = line.split(['-', 'T', ':', '.']);
+
+    let year = parts.next()?.parse::<i32>().ok()?;
+    let month = parts.next()?.parse::<u32>().ok()?;
+    let day = parts.next()?.parse::<u32>().ok()?;
+    let hour = parts.next()?.parse::<u32>().ok()?;
+    let minute = parts.next()?.parse::<u32>().ok()?;
+    let second = parts.next()?.parse::<u32>().ok()?;
+
+    Some(
+        Utc.with_ymd_and_hms(year, month, day, hour, minute, second)
+            .unwrap(),
+    )
 }
 
-/// Helper function to parse user and host from log entries
+/// Parses user and host from log entries.
+/// Format: "# User@Host: user[user] @  [192.168.1.100]  Id: 541085"
 pub(crate) fn parse_user_host(line: &str) -> Option<(String, String)> {
-    let re = Regex::new(r"User@Host: (.+?)\s+@\s+\[(.+?)\]").unwrap();
-    re.captures(line)
-        .map(|caps| (caps[1].to_string(), caps[2].to_string()))
+    let start = line.find("User@Host: ")? + "User@Host: ".len();
+    let rest = &line[start..];
+
+    let at_pos = rest.find(" @ ")?;
+    let user = rest[..at_pos].to_string();
+
+    let rest = &rest[at_pos + 3..];
+    let bracket_start = rest.find('[')?;
+    let bracket_end = rest.find(']')?;
+    let host = rest[bracket_start + 1..bracket_end].to_string();
+
+    Some((user, host))
 }
 
-/// Helper function to parse query stats from log entries
+/// Parses query stats from log entries.
+/// Format: "# `Query_time`: 0.997582  `Lock_time`: 0.000284 `Rows_sent`: 1  `Rows_examined`: 410716"
 pub(crate) fn parse_query_stats(line: &str) -> Option<(f64, f64, u64, u64)> {
-    let re = Regex::new(r"#\sQuery_time: ([0-9\.]+)  Lock_time: ([0-9\.]+) Rows_sent: ([0-9]+)  Rows_examined: ([0-9]+)").unwrap();
-    re.captures(line).map(|caps| {
-        (
-            caps[1].parse().unwrap(),
-            caps[2].parse().unwrap(),
-            caps[3].parse().unwrap(),
-            caps[4].parse().unwrap(),
-        )
-    })
+    fn extract_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
+        let start = line.find(field)? + field.len();
+        let rest = &line[start..].trim_start();
+        let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+        Some(&rest[..end])
+    }
+
+    let query_time = extract_value(line, "Query_time:")?.parse().ok()?;
+    let lock_time = extract_value(line, "Lock_time:")?.parse().ok()?;
+    let rows_sent = extract_value(line, "Rows_sent:")?.parse().ok()?;
+    let rows_examined = extract_value(line, "Rows_examined:")?.parse().ok()?;
+
+    Some((query_time, lock_time, rows_sent, rows_examined))
 }
 
 pub(crate) fn match_bin(line: &str) -> bool {
-    let re = Regex::new(r"^/").unwrap();
-    re.is_match(line)
+    line.starts_with('/')
 }
 
 pub(crate) fn match_set(line: &str) -> bool {
-    let re = Regex::new(r"^SET (?:last_insert_id|insert_id|timestamp)").unwrap();
-    re.is_match(line)
+    if let Some(rest) = line.strip_prefix("SET ") {
+        rest.starts_with("last_insert_id")
+            || rest.starts_with("insert_id")
+            || rest.starts_with("timestamp")
+    } else {
+        false
+    }
 }
 
 pub(crate) fn match_use(line: &str) -> bool {
-    let re = Regex::new(r"^(?i)use ").unwrap();
-    re.is_match(line)
+    line.len() >= 4 && line[..4].eq_ignore_ascii_case("use ")
 }
 
 pub(crate) fn match_tcp(line: &str) -> bool {
-    let re = Regex::new(r"^(?i)(Tcp|Time)").unwrap();
-    re.is_match(line)
+    (line.len() >= 3 && line[..3].eq_ignore_ascii_case("Tcp"))
+        || (line.len() >= 4 && line[..4].eq_ignore_ascii_case("Time"))
 }
 
 #[cfg(test)]

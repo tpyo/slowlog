@@ -20,29 +20,23 @@
 //! use slowlog::process_slow_log_file;
 //!
 //! process_slow_log_file("path/to/slow.log", |query| {
+//!     println!("{:?}", query);
+//! });
+//! ```
+//!
+//! ## Processing a slow log string
+//!
+//! ```
+//! use slowlog::process_slow_log_str;
+//!
+//! process_slow_log_str("SELECT * FROM users", |query| {
 //!     println!("Original: {}", query.query);
 //!     println!("Normalised: {}", query.formatted);
 //!     println!("Fingerprint: {}", query.fingerprint);
 //!     println!("Query time: {:.2}s", query.stats.query_time);
 //!     println!("Rows examined: {}", query.stats.rows_examined);
-//! }).unwrap();
+//! });
 //! ```
-//!
-//! ## Processing from a reader
-//!
-//! ```no_run
-//! use slowlog::process_slow_log_reader;
-//! use std::fs::File;
-//! use std::io::BufReader;
-//!
-//! let file = File::open("slow.log").unwrap();
-//! let reader = BufReader::new(file);
-//!
-//! process_slow_log_reader(reader, |query| {
-//!     println!("{:?}", query);
-//! }).unwrap();
-//! ```
-//!
 //! # Query Normalisation
 //!
 //! Queries are normalised by replacing all literal values with `?` placeholders:
@@ -56,9 +50,12 @@
 mod helpers;
 mod sql;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use sqlparser::parser::ParserError;
+
+#[cfg(feature = "readers")]
 use std::fs::File;
+#[cfg(feature = "readers")]
 use std::io::{self, BufRead, BufReader};
 
 /// Statistics associated with a query execution.
@@ -74,7 +71,7 @@ use std::io::{self, BufRead, BufReader};
 /// * `lock_time` - Time spent waiting for locks in seconds
 /// * `rows_sent` - Number of rows returned by the query
 /// * `rows_examined` - Number of rows examined during query execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct QueryStats {
     pub user: String,
     pub host: String,
@@ -99,18 +96,18 @@ pub struct QueryStats {
 ///
 /// # Examples
 ///
-/// ```no_run
-/// use slowlog::process_slow_log_file;
+/// ```
+/// use slowlog::process_slow_log_str;
 ///
-/// process_slow_log_file("slow.log", |query| {
+/// process_slow_log_str("", |query| {
 ///     // Group queries by fingerprint
 ///     println!("Fingerprint: {}", query.fingerprint);
 ///     println!("Template: {}", query.formatted);
 ///     println!("Example: {}", query.query);
 ///     println!("Execution time: {:.3}s", query.stats.query_time);
-/// }).unwrap();
+/// });
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub query: String,
     pub formatted: String,
@@ -132,8 +129,8 @@ pub enum QueryError {
     InvalidQuery,
 }
 
-impl std::fmt::Display for QueryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for QueryError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::ParseError(msg) => write!(f, "Failed to parse query: {msg}"),
             Self::InvalidQuery => write!(f, "No valid SQL statement found"),
@@ -141,11 +138,82 @@ impl std::fmt::Display for QueryError {
     }
 }
 
-impl std::error::Error for QueryError {}
+impl core::error::Error for QueryError {}
 
 impl From<ParserError> for QueryError {
     fn from(err: ParserError) -> Self {
         Self::ParseError(err.to_string())
+    }
+}
+
+/// Processes a MySQL slow query log from a string slice.
+///
+/// Parses a slow query log provided as a `&str`, calling the provided callback
+/// for each query entry found.
+///
+/// # Arguments
+///
+/// * `content` - The slow query log content as a string slice
+/// * `query_callback` - Function called for each parsed query entry
+pub fn process_slow_log_str<Q: FnMut(Query)>(content: &str, mut query_callback: Q) {
+    let mut current_query = String::new();
+    let mut current_stats = QueryStats {
+        user: String::new(),
+        host: String::new(),
+        time: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
+        query_time: 0.0,
+        lock_time: 0.0,
+        rows_sent: 0,
+        rows_examined: 0,
+    };
+
+    for line in content.lines() {
+        if helpers::match_bin(line)
+            || helpers::match_set(line)
+            || helpers::match_use(line)
+            || helpers::match_tcp(line)
+        {
+            continue;
+        }
+
+        if let Some(timestamp) = helpers::parse_timestamp(line) {
+            current_stats.time = timestamp;
+            continue;
+        }
+
+        if let Some((user, host)) = helpers::parse_user_host(line) {
+            if !current_query.is_empty() {
+                match sql::format_query(&current_query) {
+                    Ok(formatted) => {
+                        let fingerprint = sql::fingerprint_query(&formatted);
+                        query_callback(Query {
+                            query: current_query.trim().to_string(),
+                            formatted,
+                            fingerprint,
+                            stats: current_stats.clone(),
+                        });
+                    }
+                    Err(e) => eprintln!("Error formatting query: {e}"),
+                }
+            }
+
+            current_stats.user = user;
+            current_stats.host = host;
+            current_query = String::new();
+            continue;
+        }
+
+        if let Some((query_time, lock_time, rows_sent, rows_examined)) =
+            helpers::parse_query_stats(line)
+        {
+            current_stats.query_time = query_time;
+            current_stats.lock_time = lock_time;
+            current_stats.rows_sent = rows_sent;
+            current_stats.rows_examined = rows_examined;
+            continue;
+        }
+
+        current_query = format!("{current_query} {line}");
     }
 }
 
@@ -175,28 +243,7 @@ impl From<ParserError> for QueryError {
 ///     println!("Rows: {}", query.stats.rows_examined);
 /// }).unwrap();
 /// ```
-///
-/// # Grouping queries by fingerprint
-///
-/// ```no_run
-/// use slowlog::process_slow_log_file;
-/// use std::collections::HashMap;
-///
-/// let mut queries: HashMap<String, Vec<f64>> = HashMap::new();
-///
-/// process_slow_log_file("slow.log", |query| {
-///     queries
-///         .entry(query.fingerprint.clone())
-///         .or_insert_with(Vec::new)
-///         .push(query.stats.query_time);
-/// }).unwrap();
-///
-/// // Find slowest query patterns
-/// for (fingerprint, times) in queries.iter() {
-///     let avg_time: f64 = times.iter().sum::<f64>() / times.len() as f64;
-///     println!("Average time: {:.3}s, count: {}", avg_time, times.len());
-/// }
-/// ```
+#[cfg(feature = "readers")]
 pub fn process_slow_log_file<Q>(path: &str, query_callback: Q) -> io::Result<()>
 where
     Q: FnMut(Query),
@@ -222,37 +269,6 @@ where
 /// Returns `Ok(())` if the data was processed successfully, or an `io::Error`
 /// if reading failed.
 ///
-/// # Examples
-///
-/// ## Reading from a file
-///
-/// ```no_run
-/// use slowlog::process_slow_log_reader;
-/// use std::fs::File;
-/// use std::io::BufReader;
-///
-/// let file = File::open("slow.log").unwrap();
-/// let reader = BufReader::new(file);
-///
-/// process_slow_log_reader(reader, |query| {
-///     println!("{:?}", query);
-/// }).unwrap();
-/// ```
-///
-/// ## Reading from stdin
-///
-/// ```no_run
-/// use slowlog::process_slow_log_reader;
-/// use std::io;
-///
-/// let stdin = io::stdin();
-/// let reader = stdin.lock();
-///
-/// process_slow_log_reader(reader, |query| {
-///     println!("Fingerprint: {}", query.fingerprint);
-/// }).unwrap();
-/// ```
-///
 /// ## Reading from a byte slice
 ///
 /// ```
@@ -269,6 +285,7 @@ where
 ///     assert_eq!(query.stats.query_time, 1.5);
 /// }).unwrap();
 /// ```
+#[cfg(feature = "readers")]
 pub fn process_slow_log_reader<R: BufRead, Q: FnMut(Query)>(
     reader: R,
     mut query_callback: Q,
@@ -277,7 +294,7 @@ pub fn process_slow_log_reader<R: BufRead, Q: FnMut(Query)>(
     let mut current_stats = QueryStats {
         user: String::new(),
         host: String::new(),
-        time: chrono::Utc::now(),
+        time: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
         query_time: 0.0,
         lock_time: 0.0,
         rows_sent: 0,
@@ -335,14 +352,13 @@ pub fn process_slow_log_reader<R: BufRead, Q: FnMut(Query)>(
             current_stats.rows_examined = rows_examined;
             continue;
         }
-        // Append line to current_query
         current_query = format!("{current_query} {line}");
     }
 
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "readers"))]
 mod tests {
     use super::*;
     use std::io::BufReader;
