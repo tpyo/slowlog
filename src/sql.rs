@@ -1,7 +1,7 @@
-use crate::QueryError;
+use super::QueryError;
 use sha1::{Digest, Sha1};
 use sqlparser::ast::{
-    Expr, Function, FunctionArg, FunctionArgExpr, FunctionArguments, SelectItem, SetExpr,
+    Expr, Function, FunctionArg, FunctionArgExpr, FunctionArguments, OnInsert, SelectItem, SetExpr,
     Statement, Value, ValueWithSpan,
 };
 use sqlparser::dialect::MySqlDialect;
@@ -15,9 +15,24 @@ fn replace_values_with_placeholders(statement: &mut Statement) {
                 if let Some(ref mut selection) = select.selection {
                     replace_values_in_expr(selection);
                 }
-
                 for item in &mut select.projection {
                     replace_values_in_select_item(item);
+                }
+            }
+            if let Some(ref mut limit_clause) = query.limit_clause {
+                match limit_clause {
+                    sqlparser::ast::LimitClause::LimitOffset { limit, offset, .. } => {
+                        if let Some(limit) = limit {
+                            replace_values_in_expr(limit);
+                        }
+                        if let Some(offset) = offset {
+                            replace_values_in_expr(&mut offset.value);
+                        }
+                    }
+                    sqlparser::ast::LimitClause::OffsetCommaLimit { offset, limit } => {
+                        replace_values_in_expr(offset);
+                        replace_values_in_expr(limit);
+                    }
                 }
             }
         }
@@ -30,14 +45,32 @@ fn replace_values_with_placeholders(statement: &mut Statement) {
             }
         }
         Statement::Insert(insert) => {
-            let source = insert.source.as_mut();
-            if let Some(source) = source {
-                if let SetExpr::Values(values) = source.body.as_mut() {
-                    for value in &mut values.rows {
-                        for expr in value {
-                            replace_values_in_expr(expr);
+            if let Some(source) = insert.source.as_mut() {
+                match source.body.as_mut() {
+                    SetExpr::Values(values) => {
+                        for value in &mut values.rows {
+                            for expr in value {
+                                replace_values_in_expr(expr);
+                            }
                         }
                     }
+                    SetExpr::Select(select) => {
+                        if let Some(ref mut selection) = select.selection {
+                            replace_values_in_expr(selection);
+                        }
+                        for item in &mut select.projection {
+                            replace_values_in_select_item(item);
+                        }
+                        if let Some(ref mut having) = select.having {
+                            replace_values_in_expr(having);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(OnInsert::DuplicateKeyUpdate(assignments)) = &mut insert.on {
+                for assignment in assignments {
+                    replace_values_in_expr(&mut assignment.value);
                 }
             }
         }
@@ -84,6 +117,7 @@ fn replace_values_in_function(func: &mut Function) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn replace_values_in_expr(expr: &mut Expr) {
     match expr {
         Expr::Value(_) => {
@@ -137,9 +171,10 @@ fn replace_values_in_expr(expr: &mut Expr) {
         }
         Expr::InList { expr, list, .. } => {
             replace_values_in_expr(expr);
-            for expr in list {
-                replace_values_in_expr(expr);
-            }
+            *list = vec![Expr::Value(ValueWithSpan {
+                value: Value::Placeholder("?".to_string()),
+                span: Span::empty(),
+            })];
         }
         Expr::Between {
             expr, low, high, ..
@@ -147,6 +182,9 @@ fn replace_values_in_expr(expr: &mut Expr) {
             replace_values_in_expr(expr);
             replace_values_in_expr(low);
             replace_values_in_expr(high);
+        }
+        Expr::Interval(interval) => {
+            replace_values_in_expr(&mut interval.value);
         }
         Expr::Function(func) => {
             replace_values_in_function(func);
@@ -203,11 +241,12 @@ pub(crate) fn format_query(input: &str) -> Result<String, QueryError> {
 }
 
 /// Calculates SHA1 hash fingerprint of a query
+#[allow(clippy::format_collect)]
 pub(crate) fn fingerprint_query(query: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(query.as_bytes());
     let result = hasher.finalize();
-    format!("{result:x}")
+    result.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -225,7 +264,7 @@ mod tests {
     #[test]
     fn test_select_with_in() {
         let input = "select * from tablename where id in (1,2,3) and name not in (4,5,6)";
-        let expected = "SELECT * FROM tablename WHERE id IN (?, ?, ?) AND name NOT IN (?, ?, ?)";
+        let expected = "SELECT * FROM tablename WHERE id IN (?) AND name NOT IN (?)";
         let replaced = format_query(input).unwrap();
         assert_eq!(replaced, expected);
     }
@@ -282,7 +321,7 @@ mod tests {
     #[test]
     fn test_select_with_all() {
         let input = "select (SELECT id FROM foobar WHERE id=1), max(1, ceil(123)) as thing, IF(GROUPING(b)=1, 'All Employees', b) as Employees, * from tablename where id = 1 and name = 'test' and age > 10 and age < 20 and age != 30 and age <> 40 and age in (1,2,3) and age not in (4,5,6) and age between 10 and 20 and age like '\"%test%\"' and age not like '%test%'";
-        let expected = "SELECT (SELECT id FROM foobar WHERE id = ?), max(?, CEIL(?)) AS thing, IF(GROUPING(b) = ?, ?, b) AS Employees, * FROM tablename WHERE id = ? AND name = ? AND age > ? AND age < ? AND age <> ? AND age <> ? AND age IN (?, ?, ?) AND age NOT IN (?, ?, ?) AND age BETWEEN ? AND ? AND age LIKE ? AND age NOT LIKE ?";
+        let expected = "SELECT (SELECT id FROM foobar WHERE id = ?), max(?, CEIL(?)) AS thing, IF(GROUPING(b) = ?, ?, b) AS Employees, * FROM tablename WHERE id = ? AND name = ? AND age > ? AND age < ? AND age <> ? AND age <> ? AND age IN (?) AND age NOT IN (?) AND age BETWEEN ? AND ? AND age LIKE ? AND age NOT LIKE ?";
         let replaced = format_query(input).unwrap();
         assert_eq!(replaced, expected);
     }
@@ -311,6 +350,34 @@ mod tests {
         let expected = "DELETE FROM users WHERE age > ? AND name LIKE ? AND age BETWEEN ? AND ?";
         let replaced = format_query(input).unwrap();
         assert_eq!(replaced, expected);
+    }
+
+    #[test]
+    fn test_insert_select() {
+        let input = "INSERT INTO balances (user_id, amount, status) SELECT orders.user_id, SUM(orders.amount) AS amount, orders.status FROM orders INNER JOIN users ON orders.user_id = users.id WHERE orders.user_id IN (1, 2) AND orders.status IN ('active', 'pending') AND users.active = 1 GROUP BY orders.user_id, orders.status HAVING SUM(orders.amount) <> 0 ON DUPLICATE KEY UPDATE amount = IF(VALUES(status) > status, VALUES(amount), amount)";
+        let expected = "INSERT INTO balances (user_id, amount, status) SELECT orders.user_id, SUM(orders.amount) AS amount, orders.status FROM orders INNER JOIN users ON orders.user_id = users.id WHERE orders.user_id IN (?) AND orders.status IN (?) AND users.active = ? GROUP BY orders.user_id, orders.status HAVING SUM(orders.amount) <> ? ON DUPLICATE KEY UPDATE amount = IF(VALUES(status) > status, VALUES(amount), amount)";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_interval() {
+        let input = "SELECT * FROM tablename WHERE created_at > NOW() - INTERVAL 7 DAY";
+        let expected = "SELECT * FROM tablename WHERE created_at > NOW() - INTERVAL ? DAY";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_limit_offset() {
+        let input = "SELECT * FROM tablename WHERE id = 1 LIMIT 10 OFFSET 20";
+        let expected = "SELECT * FROM tablename WHERE id = ? LIMIT ? OFFSET ?";
+        assert_eq!(format_query(input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_select_with_limit_only() {
+        let input = "SELECT * FROM tablename LIMIT 100";
+        let expected = "SELECT * FROM tablename LIMIT ?";
+        assert_eq!(format_query(input).unwrap(), expected);
     }
 
     #[test]
