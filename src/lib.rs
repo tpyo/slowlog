@@ -155,7 +155,54 @@ impl From<ParserError> for QueryError {
 ///
 /// * `content` - The slow query log content as a string slice
 /// * `query_callback` - Function called for each parsed query entry
-pub fn process_slow_log_str<Q: FnMut(Query)>(content: &str, mut query_callback: Q) {
+pub fn process_slow_log_str<Q: FnMut(Query)>(content: &str, query_callback: Q) {
+    let _ = process_slow_log_lines(
+        content.lines().map(Ok::<_, core::convert::Infallible>),
+        query_callback,
+    );
+}
+
+/// Processes slow log data from an iterator of lines.
+///
+/// Core processing function that accepts any iterator yielding `Result<S, E>`
+/// where `S: AsRef<str>`.
+///
+/// For file or buffered reader input, prefer [`process_slow_log_file`] or
+/// [`process_slow_log_reader`], which delegate to this function.
+///
+/// # Arguments
+///
+/// * `lines` - Iterator yielding lines as `Result<S, E>`
+/// * `query_callback` - Function called for each parsed query entry
+///
+/// # Returns
+///
+/// Returns `Ok(())` if all lines were processed successfully, or the first
+/// error yielded by the iterator.
+///
+/// # Examples
+///
+/// ```
+/// use slowlog::process_slow_log_lines;
+///
+/// let data = "# Time: 2024-01-01T00:00:00.000000Z\n\
+///             # User@Host: user[user] @  [127.0.0.1]\n\
+///             # Query_time: 1.5  Lock_time: 0.1 Rows_sent: 10  Rows_examined: 1000\n\
+///             SELECT * FROM users WHERE id = 1;";
+///
+/// process_slow_log_lines(
+///     data.lines().map(Ok::<_, std::convert::Infallible>),
+///     |query| {
+///         assert_eq!(query.stats.query_time, 1.5);
+///     },
+/// ).unwrap();
+/// ```
+pub fn process_slow_log_lines<I, S, E, Q>(lines: I, mut query_callback: Q) -> Result<(), E>
+where
+    I: Iterator<Item = Result<S, E>>,
+    S: AsRef<str>,
+    Q: FnMut(Query),
+{
     let mut current_query = String::new();
     let mut current_stats = QueryStats {
         user: String::new(),
@@ -167,7 +214,10 @@ pub fn process_slow_log_str<Q: FnMut(Query)>(content: &str, mut query_callback: 
         rows_examined: 0,
     };
 
-    for line in content.lines() {
+    for line in lines {
+        let line = line?;
+        let line = line.as_ref();
+
         if helpers::match_bin(line)
             || helpers::match_set(line)
             || helpers::match_use(line)
@@ -215,6 +265,8 @@ pub fn process_slow_log_str<Q: FnMut(Query)>(content: &str, mut query_callback: 
 
         current_query = format!("{current_query} {line}");
     }
+
+    Ok(())
 }
 
 /// Processes a MySQL slow query log file.
@@ -259,6 +311,8 @@ where
 /// type implementing `BufRead`, allowing you to process data from files, network
 /// streams, in-memory buffers, or any other buffered source.
 ///
+/// Delegates to [`process_slow_log_lines`].
+///
 /// # Arguments
 ///
 /// * `reader` - Any type implementing `BufRead` (e.g., `BufReader<File>`, `BufReader<TcpStream>`)
@@ -288,74 +342,9 @@ where
 #[cfg(feature = "readers")]
 pub fn process_slow_log_reader<R: BufRead, Q: FnMut(Query)>(
     reader: R,
-    mut query_callback: Q,
+    query_callback: Q,
 ) -> io::Result<()> {
-    let mut current_query = String::new();
-    let mut current_stats = QueryStats {
-        user: String::new(),
-        host: String::new(),
-        time: Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap(),
-        query_time: 0.0,
-        lock_time: 0.0,
-        rows_sent: 0,
-        rows_examined: 0,
-    };
-
-    for line in reader.lines() {
-        let line = line?;
-        if helpers::match_bin(&line)
-            || helpers::match_set(&line)
-            || helpers::match_use(&line)
-            || helpers::match_tcp(&line)
-        {
-            continue;
-        }
-
-        if let Some(timestamp) = helpers::parse_timestamp(&line) {
-            current_stats.time = timestamp;
-            continue;
-        }
-
-        if let Some((user, host)) = helpers::parse_user_host(&line) {
-            let query = current_query.clone();
-            if !query.is_empty() {
-                let formatted = sql::format_query(&query.clone());
-                match formatted {
-                    Ok(formatted) => {
-                        let fingerprint = sql::fingerprint_query(&formatted);
-                        let query = Query {
-                            query: query.trim().to_string(),
-                            formatted,
-                            fingerprint,
-                            stats: current_stats.clone(),
-                        };
-                        query_callback(query);
-                    }
-                    Err(e) => {
-                        eprintln!("Error formatting query: {e}");
-                    }
-                }
-            }
-
-            current_stats.user = user;
-            current_stats.host = host;
-            current_query = String::new();
-            continue;
-        }
-
-        if let Some((query_time, lock_time, rows_sent, rows_examined)) =
-            helpers::parse_query_stats(&line)
-        {
-            current_stats.query_time = query_time;
-            current_stats.lock_time = lock_time;
-            current_stats.rows_sent = rows_sent;
-            current_stats.rows_examined = rows_examined;
-            continue;
-        }
-        current_query = format!("{current_query} {line}");
-    }
-
-    Ok(())
+    process_slow_log_lines(reader.lines(), query_callback)
 }
 
 #[cfg(all(test, feature = "readers"))]
