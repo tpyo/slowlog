@@ -28,7 +28,7 @@ readers = []
 chrono = { version = "0.4.44", default-features = false, features = ["alloc"] }
 hex-literal = "1.1.0"
 sha1 = { version = "0.11.0", default-features = false }
-sqlparser = { version = "0.61.0", default-features = false }
+sqlparser = { version = "0.62.0", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.27.0"
